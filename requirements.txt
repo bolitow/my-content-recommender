@@ -1,0 +1,18 @@
+# Application principale Streamlit
+streamlit==1.28.0
+requests==2.31.0
+
+# API FastAPI
+fastapi==0.104.0
+uvicorn[standard]==0.24.0
+pydantic==2.4.0
+
+# Système de recommandation ALS
+pandas==2.1.0
+numpy==1.24.3
+scipy==1.11.0
+scikit-learn==1.3.0
+implicit==0.7.2
+
+# Utilitaires
+python-dotenv==1.0.0

@@ -1,0 +1,23 @@
+{
+  "total_articles": 364047,
+  "articles_with_clicks": 323,
+  "coverage_percentage": 0.08872480751111807,
+  "cold_start_articles": 363724,
+  "cold_start_percentage": 99.91127519248889,
+  "total_users": 707,
+  "total_interactions": 1883,
+  "avg_clicks_per_user": 2.6633663366336635,
+  "embedding_dimension": 250,
+  "embeddings_count": 364047,
+  "concentration_top_10": 73.23420074349443,
+  "total_categories": 461,
+  "top_5_categories": {
+    "281": 12817,
+    "375": 10005,
+    "399": 9049,
+    "412": 8648,
+    "431": 7759
+  },
+  "avg_words_count": 190.89772749123054,
+  "median_words_count": 186.0
+}

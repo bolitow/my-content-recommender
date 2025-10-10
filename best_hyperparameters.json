@@ -1,0 +1,23 @@
+{
+  "svd": {
+    "n_factors": 50,
+    "n_epochs": 20,
+    "lr_all": 0.008,
+    "reg_all": 0.02
+  },
+  "nmf": {
+    "n_factors": 30,
+    "n_epochs": 30
+  },
+  "als": {
+    "factors": 150,
+    "regularization": 0.001,
+    "iterations": 15,
+    "alpha": 40
+  },
+  "scores": {
+    "svd": 0.015,
+    "nmf": 0.06,
+    "als": 0.005
+  }
+}

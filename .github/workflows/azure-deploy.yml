@@ -1,0 +1,51 @@
+# Workflow GitHub Actions pour déployer l'Azure Function
+# Se déclenche automatiquement à chaque push sur main
+
+name: Déployer vers Azure Functions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'azure_function/**'
+      - '.github/workflows/azure-deploy.yml'
+  workflow_dispatch:  # Permet de déclencher manuellement
+
+env:
+  AZURE_FUNCTIONAPP_NAME: 'my-content-recommender'  # À MODIFIER avec votre nom
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: './azure_function'
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📥 Checkout du code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Configuration Python ${{ env.PYTHON_VERSION }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: 📦 Installation des dépendances
+      run: |
+        cd ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt --target=".python_packages/lib/site-packages"
+
+    - name: 🚀 Déploiement vers Azure Functions
+      uses: Azure/functions-action@v1
+      with:
+        app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+        package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+        publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+        scm-do-build-during-deployment: false
+        enable-oryx-build: false
+
+    - name: ✅ Déploiement terminé
+      run: |
+        echo "🎉 Azure Function déployée avec succès!"
+        echo "URL: https://${{ env.AZURE_FUNCTIONAPP_NAME }}.azurewebsites.net"
