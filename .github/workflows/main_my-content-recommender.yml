@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_FUNCTIONAPP_PACKAGE_PATH: 'azure_function' # Dossier contenant la Function
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: '.' # set this to the path to your web app project, defaults to the repository root
   PYTHON_VERSION: '3.11' # set this to the python version to use (supports 3.6, 3.7, 3.8)
 
 jobs:
@@ -35,12 +35,12 @@ jobs:
           source venv/bin/activate
 
       - name: Install dependencies
-        run: pip install -r azure_function/requirements.txt
+        run: pip install -r requirements.txt
 
       # Optional: Add step to run tests here
 
       - name: Zip artifact for deployment
-        run: cd azure_function && zip ../release.zip ./* -r && cd ..
+        run: zip release.zip ./* -r
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -71,9 +71,9 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_7EC80E32C1D74CB2B570A529A18A5CA7 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E41C508531D34B058133AB8F20A78231 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_E24E136F161A430A85DA2B58870B1B88 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_3CD996EBCB544B849F86BC9B3F2F9EDD }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_AA8B829C48C9414F9CD367A7314E811A }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_A4200DC1DFFA40ADA1A96C0E035F5D51 }}
 
       - name: 'Deploy to Azure Functions'
         uses: Azure/functions-action@v1
@@ -81,5 +81,5 @@ jobs:
         with:
           app-name: 'my-content-recommender'
           slot-name: 'Production'
-          package: '.' # Déployer le contenu extrait du zip
+          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
           
