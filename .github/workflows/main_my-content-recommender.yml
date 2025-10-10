@@ -81,6 +81,7 @@ jobs:
         with:
           app-name: 'my-content-recommender'
           slot-name: 'Production'
-          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+          package: '.'
           
+
 
