@@ -5,4 +5,5 @@ azure-storage-blob==12.19.0
 # ML dependencies for ALS model
 numpy==1.24.3
 scipy==1.11.0
+pandas==2.0.3
 implicit==0.7.2
