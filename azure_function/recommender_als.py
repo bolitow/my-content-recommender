@@ -152,9 +152,9 @@ class ALSRecommender:
                 filter_already_liked_items=exclude_seen
             )
 
-            # Convertir les indices en IDs d'articles
+            # Convertir les indices en IDs d'articles (int Python standard)
             recommended_items = [
-                self.idx_to_item[idx] for idx in recommendations
+                int(self.idx_to_item[idx]) for idx in recommendations
                 if idx in self.idx_to_item
             ]
 
@@ -191,7 +191,8 @@ class ALSRecommender:
             seen_items = self.user_items.get(user_id, set())
             popular_items = [item for item in popular_items if item not in seen_items]
 
-        return popular_items[:n]
+        # Convertir en int Python standard pour JSON serialization
+        return [int(item) for item in popular_items[:n]]
 
     def get_user_info(self, user_id: int) -> Dict:
         """
