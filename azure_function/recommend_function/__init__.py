@@ -243,8 +243,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
 # Optionnel : Charger le modèle au démarrage (warm-up)
 # Ceci réduit le cold start time
-try:
-    logger.info("🚀 Pré-chargement du modèle au démarrage...")
-    load_model_from_storage()
-except Exception as e:
-    logger.warning(f"⚠️  Pré-chargement échoué (le modèle sera chargé à la première requête): {e}")
+# DÉSACTIVÉ pour éviter les erreurs au démarrage si les variables ne sont pas configurées
+# try:
+#     logger.info("🚀 Pré-chargement du modèle au démarrage...")
+#     load_model_from_storage()
+# except Exception as e:
+#     logger.warning(f"⚠️  Pré-chargement échoué (le modèle sera chargé à la première requête): {e}")

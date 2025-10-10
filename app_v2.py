@@ -9,6 +9,10 @@ import pandas as pd
 import json
 from typing import List, Dict, Optional
 import os
+from dotenv import load_dotenv
+
+# Charger les variables d'environnement depuis .env
+load_dotenv()
 
 # Configuration de la page
 st.set_page_config(
