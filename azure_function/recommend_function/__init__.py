@@ -6,12 +6,18 @@ Charge le modèle ALS depuis Azure Blob Storage au démarrage
 import logging
 import json
 import os
+import sys
 import pickle
 import tempfile
 from typing import Dict, Any, Optional
 
 import azure.functions as func
 from azure.storage.blob import BlobServiceClient
+
+# Ajouter le chemin parent au PYTHONPATH pour trouver recommender_als
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 # Configuration
 STORAGE_CONNECTION_STRING = os.environ.get("STORAGE_CONNECTION_STRING", "")
