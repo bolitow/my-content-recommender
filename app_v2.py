@@ -308,7 +308,7 @@ def main():
         # Mode de test
         use_mock = st.checkbox(
             "🔧 Mode test (sans Azure)",
-            value=True,
+            value=False,
             help="Utilise des données simulées"
         )
 
@@ -347,14 +347,16 @@ def main():
 
             # Gestion des erreurs
             if "error" in recommendations_data:
-                st.markdown(f"""
-                <div class="status-error">
-                    <strong>❌ Erreur:</strong> {recommendations_data['error']}
-                    {f'<br><small>{recommendations_data.get("message", "")}</small>' if "message" in recommendations_data else ''}
-                </div>
-                """, unsafe_allow_html=True)
+                error_msg = f"❌ **Erreur:** {recommendations_data['error']}"
+                if "message" in recommendations_data and recommendations_data["message"]:
+                    error_msg += f"\n\n_{recommendations_data['message']}_"
+                st.error(error_msg)
 
             elif "recommendations" in recommendations_data:
+                # Message de succès
+                if not use_mock:
+                    st.success(f"✅ Recommandations générées avec succès par le modèle {recommendations_data.get('model', 'ALS')}")
+
                 # Charger les métadonnées
                 articles_df = load_articles_metadata()
 
