@@ -19,7 +19,7 @@ st.set_page_config(
     page_title="My Content - Recommandations",
     page_icon="📰",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # Style CSS simplifié
@@ -201,6 +201,40 @@ def display_recommendation_card(rank: int, article_id: int, article_data: Option
 def main():
     """Interface principale"""
 
+    # Sidebar - Options avancées
+    with st.sidebar:
+        st.title("⚙️ Options")
+
+        st.markdown("### 🧪 Mode de saisie")
+        input_mode = st.radio(
+            "Choisir le mode",
+            ["📋 Liste utilisateurs", "✍️ Saisie manuelle", "🎲 Utilisateur aléatoire"],
+            help="Sélectionne comment choisir l'utilisateur"
+        )
+
+        st.markdown("---")
+
+        st.markdown("### 🔧 Configuration")
+        use_mock = st.checkbox(
+            "Mode test (sans Azure)",
+            value=False,
+            help="Utilise des données simulées au lieu de l'API Azure"
+        )
+
+        n_recommendations = st.slider(
+            "Nombre de recommandations",
+            min_value=1,
+            max_value=10,
+            value=5,
+            help="Nombre d'articles à recommander"
+        )
+
+        st.markdown("---")
+
+        st.markdown("### ℹ️ Info")
+        st.caption(f"**API:** {'🔴 Mode test' if use_mock else '🟢 Azure Functions'}")
+        st.caption(f"**Endpoint:** `{AZURE_FUNCTION_URL.split('/api')[0]}/api/...`")
+
     # En-tête
     st.markdown("""
     <div class="header-container">
@@ -209,28 +243,48 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # Section de sélection utilisateur
-    col1, col2, col3 = st.columns([2, 2, 1])
+    # Section de sélection utilisateur selon le mode
+    col1, col2 = st.columns([3, 1])
 
     with col1:
-        # Charger la liste des utilisateurs
-        users_list = load_users_list()
+        if input_mode == "📋 Liste utilisateurs":
+            # Charger la liste des utilisateurs
+            users_list = load_users_list()
+            selected_user = st.selectbox(
+                "👤 Sélectionner un utilisateur",
+                options=users_list,
+                help="Choisissez un ID utilisateur dans la liste"
+            )
 
-        selected_user = st.selectbox(
-            "👤 Sélectionner un utilisateur",
-            options=users_list,
-            help="Choisissez un ID utilisateur"
-        )
+        elif input_mode == "✍️ Saisie manuelle":
+            selected_user = st.number_input(
+                "👤 Entrer un ID utilisateur",
+                min_value=1,
+                max_value=999999,
+                value=12345,
+                step=1,
+                help="Saisissez n'importe quel ID utilisateur (même inconnu du modèle)"
+            )
+
+        else:  # Mode aléatoire
+            import random
+            if 'random_user' not in st.session_state:
+                st.session_state.random_user = random.randint(1, 100000)
+
+            col_rand1, col_rand2 = st.columns([3, 1])
+            with col_rand1:
+                selected_user = st.number_input(
+                    "👤 Utilisateur aléatoire",
+                    value=st.session_state.random_user,
+                    disabled=True,
+                    help="Un utilisateur aléatoire a été généré"
+                )
+            with col_rand2:
+                if st.button("🔄 Nouveau", use_container_width=True):
+                    st.session_state.random_user = random.randint(1, 100000)
+                    st.rerun()
 
     with col2:
-        # Mode de test
-        use_mock = st.checkbox(
-            "🔧 Mode test (sans Azure)",
-            value=False,
-            help="Utilise des données simulées"
-        )
-
-    with col3:
         # Bouton de génération
         generate_btn = st.button(
             "✨ Recommander",
@@ -256,13 +310,13 @@ def main():
 
                 recommendations_data = {
                     "user_id": selected_user,
-                    "recommendations": random.sample(range(1000, 10000), 5),
+                    "recommendations": random.sample(range(1000, 10000), min(n_recommendations, 9)),
                     "model": "ALS",
                     "status": "success"
                 }
             else:
                 # Appel réel à Azure
-                recommendations_data = get_recommendations(selected_user, 5)
+                recommendations_data = get_recommendations(selected_user, n_recommendations)
 
             # Gestion des erreurs
             if "error" in recommendations_data:
@@ -279,8 +333,8 @@ def main():
                 # Charger les métadonnées
                 articles_df = load_articles_metadata()
 
-                # Afficher les 5 recommandations
-                recommendations = recommendations_data["recommendations"][:5]
+                # Afficher les recommandations
+                recommendations = recommendations_data["recommendations"][:n_recommendations]
 
                 for idx, article_id in enumerate(recommendations, 1):
                     # Récupérer les données de l'article
