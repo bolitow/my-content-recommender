@@ -1,6 +1,6 @@
 """
-Azure Function V2 pour le système de recommandation
-Charge le modèle ALS depuis Azure Blob Storage au démarrage
+Azure Function V3 pour le système de recommandation
+Charge le modèle ALS, les métadonnées articles et les embeddings depuis Azure Blob Storage
 """
 
 import logging
@@ -9,10 +9,14 @@ import os
 import sys
 import pickle
 import tempfile
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+from io import BytesIO
+from datetime import datetime
 
 import azure.functions as func
 from azure.storage.blob import BlobServiceClient
+import pandas as pd
+import numpy as np
 
 # Ajouter le chemin parent au PYTHONPATH pour trouver recommender_als
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -23,67 +27,73 @@ if parent_dir not in sys.path:
 STORAGE_CONNECTION_STRING = os.environ.get("STORAGE_CONNECTION_STRING", "")
 MODEL_CONTAINER_NAME = os.environ.get("MODEL_CONTAINER_NAME", "models")
 MODEL_BLOB_NAME = os.environ.get("MODEL_BLOB_NAME", "als_model.pkl")
+DATA_CONTAINER_NAME = os.environ.get("DATA_CONTAINER_NAME", "data")
+ARTICLES_METADATA_BLOB = os.environ.get("ARTICLES_METADATA_BLOB", "articles_metadata.csv")
+EMBEDDINGS_BLOB = os.environ.get("EMBEDDINGS_BLOB", "articles_embeddings_reduced.pickle")
 
 # Configuration du logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Variable globale pour le modèle (chargé une seule fois au démarrage)
+# Variables globales (chargées une seule fois au démarrage)
 _recommender_model = None
-_model_loaded = False
+_articles_metadata = None
+_articles_embeddings = None
+_data_loaded = False
 
 
-def load_model_from_storage() -> Optional[Any]:
+def load_data_from_storage() -> bool:
     """
-    Charge le modèle ALS depuis Azure Blob Storage
+    Charge toutes les données nécessaires depuis Azure Blob Storage :
+    - Modèle ALS
+    - Métadonnées articles
+    - Embeddings réduits (optionnel)
 
     Returns:
-        Objet ALSRecommender ou None si échec
+        True si succès, False sinon
     """
-    global _recommender_model, _model_loaded
+    global _recommender_model, _articles_metadata, _articles_embeddings, _data_loaded
 
-    if _model_loaded and _recommender_model is not None:
-        logger.info("Modèle déjà chargé en mémoire")
-        return _recommender_model
+    if _data_loaded:
+        logger.info("Données déjà chargées en mémoire")
+        return True
 
-    logger.info("Chargement du modèle depuis Azure Blob Storage...")
+    logger.info("=" * 60)
+    logger.info("🚀 CHARGEMENT DES DONNÉES AU DÉMARRAGE")
+    logger.info("=" * 60)
 
     try:
         # Vérifier la connection string
         if not STORAGE_CONNECTION_STRING:
-            logger.error("STORAGE_CONNECTION_STRING non configurée")
-            return None
+            logger.error("❌ STORAGE_CONNECTION_STRING non configurée")
+            return False
 
         # Créer le client Blob Service
         blob_service_client = BlobServiceClient.from_connection_string(
             STORAGE_CONNECTION_STRING
         )
 
-        # Obtenir le blob client
-        blob_client = blob_service_client.get_blob_client(
+        # ===== 1. CHARGER LE MODÈLE ALS =====
+        logger.info(f"\n📦 [1/3] Chargement du modèle ALS depuis {MODEL_CONTAINER_NAME}/{MODEL_BLOB_NAME}...")
+
+        model_blob_client = blob_service_client.get_blob_client(
             container=MODEL_CONTAINER_NAME,
             blob=MODEL_BLOB_NAME
         )
 
-        # Télécharger le blob dans un fichier temporaire
+        # Télécharger dans un fichier temporaire
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pkl') as temp_file:
-            logger.info(f"Téléchargement de {MODEL_CONTAINER_NAME}/{MODEL_BLOB_NAME}...")
-
-            blob_data = blob_client.download_blob()
+            blob_data = model_blob_client.download_blob()
             blob_data.readinto(temp_file)
             temp_file_path = temp_file.name
 
-        # Charger le modèle depuis le fichier temporaire
-        logger.info(f"Chargement du modèle depuis {temp_file_path}...")
-
+        # Charger le modèle
         with open(temp_file_path, 'rb') as f:
             model_data = pickle.load(f)
 
-        # Nettoyer le fichier temporaire
         os.unlink(temp_file_path)
 
         # Reconstruire l'objet ALSRecommender
-        # Le pickle contient un dictionnaire avec toutes les données nécessaires
         from recommender_als import ALSRecommender
 
         recommender = ALSRecommender()
@@ -99,59 +109,220 @@ def load_model_from_storage() -> Optional[Any]:
         recommender.all_items = model_data['all_items']
         recommender.is_trained = True
 
-        logger.info(f"✅ Modèle chargé avec succès!")
-        logger.info(f"   - {len(recommender.user_to_idx)} utilisateurs")
-        logger.info(f"   - {len(recommender.item_to_idx)} articles")
-
         _recommender_model = recommender
-        _model_loaded = True
+        logger.info(f"   ✅ Modèle ALS chargé : {len(recommender.user_to_idx)} utilisateurs, {len(recommender.item_to_idx)} articles")
 
-        return recommender
+        # ===== 2. CHARGER LES MÉTADONNÉES ARTICLES =====
+        logger.info(f"\n📊 [2/3] Chargement des métadonnées depuis {DATA_CONTAINER_NAME}/{ARTICLES_METADATA_BLOB}...")
+
+        metadata_blob_client = blob_service_client.get_blob_client(
+            container=DATA_CONTAINER_NAME,
+            blob=ARTICLES_METADATA_BLOB
+        )
+
+        # Télécharger le CSV en mémoire
+        metadata_stream = BytesIO()
+        metadata_blob_client.download_blob().readinto(metadata_stream)
+        metadata_stream.seek(0)
+
+        # Charger dans un DataFrame pandas
+        articles_df = pd.read_csv(metadata_stream)
+        _articles_metadata = articles_df
+
+        logger.info(f"   ✅ Métadonnées chargées : {len(articles_df)} articles avec {len(articles_df.columns)} attributs")
+
+        # ===== 3. CHARGER LES EMBEDDINGS (OPTIONNEL) =====
+        try:
+            logger.info(f"\n🧠 [3/3] Chargement des embeddings depuis {DATA_CONTAINER_NAME}/{EMBEDDINGS_BLOB}...")
+
+            embeddings_blob_client = blob_service_client.get_blob_client(
+                container=DATA_CONTAINER_NAME,
+                blob=EMBEDDINGS_BLOB
+            )
+
+            # Télécharger dans un fichier temporaire
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pkl') as temp_file:
+                embeddings_data = embeddings_blob_client.download_blob()
+                embeddings_data.readinto(temp_file)
+                temp_embeddings_path = temp_file.name
+
+            # Charger les embeddings
+            with open(temp_embeddings_path, 'rb') as f:
+                embeddings_dict = pickle.load(f)
+
+            os.unlink(temp_embeddings_path)
+
+            _articles_embeddings = embeddings_dict
+            logger.info(f"   ✅ Embeddings chargés : {len(embeddings_dict)} articles")
+
+        except Exception as e:
+            logger.warning(f"   ⚠️  Embeddings non disponibles (optionnel): {e}")
+            _articles_embeddings = None
+
+        # Tout est chargé
+        _data_loaded = True
+
+        logger.info("\n" + "=" * 60)
+        logger.info("✅ TOUTES LES DONNÉES CHARGÉES AVEC SUCCÈS")
+        logger.info("=" * 60)
+
+        return True
 
     except Exception as e:
-        logger.error(f"Erreur lors du chargement du modèle: {e}")
+        logger.error(f"\n❌ ERREUR LORS DU CHARGEMENT DES DONNÉES: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return None
+        return False
+
+
+def enrich_recommendations(recommendations: List[int]) -> List[Dict[str, Any]]:
+    """
+    Enrichit les recommandations avec les métadonnées des articles
+
+    Args:
+        recommendations: Liste des IDs d'articles recommandés
+
+    Returns:
+        Liste de dictionnaires avec détails enrichis
+    """
+    if _articles_metadata is None:
+        # Pas de métadonnées disponibles, retourner juste les IDs
+        return [{"article_id": int(article_id)} for article_id in recommendations]
+
+    enriched = []
+
+    for article_id in recommendations:
+        # Chercher l'article dans les métadonnées
+        article_row = _articles_metadata[_articles_metadata['article_id'] == article_id]
+
+        if article_row.empty:
+            # Article non trouvé dans les métadonnées
+            enriched.append({
+                "article_id": int(article_id),
+                "metadata_available": False
+            })
+        else:
+            # Extraire les informations
+            article = article_row.iloc[0]
+
+            # Convertir le timestamp en date lisible
+            try:
+                created_at = datetime.fromtimestamp(article['created_at_ts'] / 1000)
+                created_at_str = created_at.strftime('%Y-%m-%d')
+            except:
+                created_at_str = None
+
+            enriched.append({
+                "article_id": int(article_id),
+                "category_id": int(article['category_id']),
+                "words_count": int(article['words_count']),
+                "created_at": created_at_str,
+                "publisher_id": int(article['publisher_id']),
+                "metadata_available": True
+            })
+
+    return enriched
+
+
+def calculate_diversity(recommendations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Calcule des métriques de diversité sur les recommandations
+
+    Args:
+        recommendations: Liste des recommandations enrichies
+
+    Returns:
+        Dictionnaire avec métriques de diversité
+    """
+    if not recommendations or not any(r.get('metadata_available') for r in recommendations):
+        return {
+            "category_diversity": 0,
+            "unique_categories": 0,
+            "total_recommendations": len(recommendations)
+        }
+
+    # Extraire les catégories
+    categories = [r['category_id'] for r in recommendations if r.get('metadata_available')]
+
+    if not categories:
+        return {
+            "category_diversity": 0,
+            "unique_categories": 0,
+            "total_recommendations": len(recommendations)
+        }
+
+    unique_categories = len(set(categories))
+    total_recommendations = len(categories)
+
+    # Diversité = ratio de catégories uniques
+    diversity_score = unique_categories / total_recommendations if total_recommendations > 0 else 0
+
+    return {
+        "category_diversity": round(diversity_score, 3),
+        "unique_categories": unique_categories,
+        "total_recommendations": total_recommendations,
+        "categories_distribution": dict(pd.Series(categories).value_counts())
+    }
 
 
 def generate_recommendations(user_id: int, n_recommendations: int) -> Dict[str, Any]:
     """
-    Génère des recommandations pour un utilisateur
+    Génère des recommandations enrichies pour un utilisateur
 
     Args:
         user_id: ID de l'utilisateur
         n_recommendations: Nombre de recommandations
 
     Returns:
-        Dictionnaire avec les recommandations
+        Dictionnaire avec les recommandations enrichies
     """
-    # Charger le modèle si nécessaire
-    recommender = load_model_from_storage()
+    # Charger les données si nécessaire
+    if not _data_loaded:
+        success = load_data_from_storage()
+        if not success:
+            return {
+                "error": "Data unavailable",
+                "message": "Les données de recommandation n'ont pas pu être chargées"
+            }
 
-    if recommender is None:
+    if _recommender_model is None:
         return {
             "error": "Model unavailable",
-            "message": "Le modèle de recommandation n'a pas pu être chargé"
+            "message": "Le modèle de recommandation n'est pas disponible"
         }
 
     try:
-        # Générer les recommandations
-        recommendations = recommender.recommend(
+        # Générer les recommandations via le modèle ALS
+        recommendations_ids = _recommender_model.recommend(
             user_id=user_id,
             n=n_recommendations,
             exclude_seen=True
         )
 
-        return {
+        # Enrichir avec les métadonnées
+        enriched_recommendations = enrich_recommendations(recommendations_ids)
+
+        # Calculer la diversité
+        diversity_metrics = calculate_diversity(enriched_recommendations)
+
+        # Construire la réponse
+        response = {
             "user_id": user_id,
-            "recommendations": recommendations,
+            "recommendations": enriched_recommendations,
+            "count": len(enriched_recommendations),
             "model": "ALS",
+            "diversity": diversity_metrics,
+            "metadata_loaded": _articles_metadata is not None,
+            "embeddings_loaded": _articles_embeddings is not None,
             "status": "success"
         }
 
+        return response
+
     except Exception as e:
         logger.error(f"Erreur lors de la génération des recommandations: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return {
             "error": "Recommendation error",
             "message": str(e)
@@ -166,15 +337,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         req: Requête HTTP entrante
 
     Returns:
-        Réponse HTTP avec les recommandations ou erreur
+        Réponse HTTP avec les recommandations enrichies ou erreur
     """
-    logger.info("=== Nouvelle requête de recommandation ===")
+    logger.info("=" * 60)
+    logger.info("📥 NOUVELLE REQUÊTE DE RECOMMANDATION")
+    logger.info("=" * 60)
 
     try:
         # Parser le body
         req_body = req.get_json()
     except ValueError:
-        logger.error("Corps de requête invalide (JSON attendu)")
+        logger.error("❌ Corps de requête invalide (JSON attendu)")
         return func.HttpResponse(
             json.dumps({
                 "error": "Invalid request body",
@@ -190,7 +363,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     # Validation
     if not user_id:
-        logger.error("Paramètre user_id manquant")
+        logger.error("❌ Paramètre user_id manquant")
         return func.HttpResponse(
             json.dumps({
                 "error": "Missing parameter",
@@ -211,7 +384,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             raise ValueError("n_recommendations doit être entre 1 et 50")
 
     except (TypeError, ValueError) as e:
-        logger.error(f"Paramètres invalides: {e}")
+        logger.error(f"❌ Paramètres invalides: {e}")
         return func.HttpResponse(
             json.dumps({
                 "error": "Invalid parameters",
@@ -222,13 +395,14 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     # Générer les recommandations
-    logger.info(f"Génération de {n_recommendations} recommandations pour l'utilisateur {user_id}")
+    logger.info(f"👤 Utilisateur: {user_id}")
+    logger.info(f"🔢 Nombre demandé: {n_recommendations}")
 
     result = generate_recommendations(user_id, n_recommendations)
 
     # Gérer les erreurs
     if "error" in result:
-        logger.error(f"Erreur: {result['error']}")
+        logger.error(f"❌ Erreur: {result['error']}")
         status_code = 503 if "unavailable" in result['error'].lower() else 500
 
         return func.HttpResponse(
@@ -239,6 +413,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     # Succès
     logger.info(f"✅ {len(result['recommendations'])} recommandations générées")
+    logger.info(f"📊 Diversité: {result['diversity']['category_diversity']}")
+    logger.info("=" * 60)
 
     return func.HttpResponse(
         json.dumps(result),
@@ -247,11 +423,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
-# Optionnel : Charger le modèle au démarrage (warm-up)
-# Ceci réduit le cold start time
-# DÉSACTIVÉ pour éviter les erreurs au démarrage si les variables ne sont pas configurées
-# try:
-#     logger.info("🚀 Pré-chargement du modèle au démarrage...")
-#     load_model_from_storage()
-# except Exception as e:
-#     logger.warning(f"⚠️  Pré-chargement échoué (le modèle sera chargé à la première requête): {e}")
+# Pré-chargement au démarrage (warm-up)
+# Ceci réduit le cold start time pour les requêtes suivantes
+try:
+    logger.info("🚀 PRÉ-CHARGEMENT DES DONNÉES AU DÉMARRAGE DE LA FUNCTION...")
+    load_data_from_storage()
+except Exception as e:
+    logger.warning(f"⚠️  Pré-chargement échoué (les données seront chargées à la première requête): {e}")
