@@ -158,7 +158,17 @@ class ALSRecommender:
                 if idx in self.idx_to_item
             ]
 
-            return recommended_items[:n]
+            # Dédupliquer explicitement tout en préservant l'ordre
+            seen = set()
+            deduplicated_items = []
+            for item in recommended_items:
+                if item not in seen:
+                    seen.add(item)
+                    deduplicated_items.append(item)
+                    if len(deduplicated_items) >= n:
+                        break
+
+            return deduplicated_items[:n]
 
         except Exception as e:
             logger.error(f"Erreur lors de la recommandation pour user {user_id}: {e}")
@@ -191,8 +201,17 @@ class ALSRecommender:
             seen_items = self.user_items.get(user_id, set())
             popular_items = [item for item in popular_items if item not in seen_items]
 
-        # Convertir en int Python standard pour JSON serialization
-        return [int(item) for item in popular_items[:n]]
+        # Dédupliquer et convertir en int Python standard pour JSON serialization
+        seen = set()
+        deduplicated_items = []
+        for item in popular_items:
+            if item not in seen:
+                seen.add(item)
+                deduplicated_items.append(int(item))
+                if len(deduplicated_items) >= n:
+                    break
+
+        return deduplicated_items[:n]
 
     def get_user_info(self, user_id: int) -> Dict:
         """
