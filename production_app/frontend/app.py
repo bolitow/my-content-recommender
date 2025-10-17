@@ -1,6 +1,6 @@
 """
-Application Streamlit V2 - Système de Recommandation d'Articles
-Interface simplifiée et moderne pour Azure deployment
+Application Streamlit V3 - Système de Recommandation d'Articles
+Version Production avec métadonnées enrichies et tracking des clics
 """
 
 import streamlit as st
@@ -10,6 +10,7 @@ import json
 from typing import List, Dict, Optional
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Charger les variables d'environnement depuis .env
 load_dotenv()
@@ -22,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Style CSS simpAlifié
+# Style CSS
 st.markdown("""
 <style>
     /* En-tête */
@@ -34,41 +35,25 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
         text-align: center;
     }
-
     .header-title {
         font-size: 3rem;
         font-weight: 700;
         margin: 0;
         color: white;
     }
-
     .header-subtitle {
         font-size: 1.2rem;
         opacity: 0.95;
         margin-top: 0.8rem;
         color: white;
     }
-
-    /* Améliorer l'apparence des metrics Streamlit */
     [data-testid="stMetricValue"] {
         font-size: 1.5rem;
         font-weight: 600;
     }
-
-    /* Divider style */
     hr {
         margin: 2rem 0;
         border-color: #e0e0e0;
-    }
-
-    /* Footer */
-    .footer-text {
-        text-align: center;
-        color: #999;
-        font-size: 0.95rem;
-        padding: 1.5rem;
-        margin-top: 3rem;
-        border-top: 1px solid #e0e0e0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -78,31 +63,15 @@ AZURE_FUNCTION_URL = os.getenv(
     "AZURE_FUNCTION_URL",
     "https://YOUR_FUNCTION_NAME.azurewebsites.net/api/recommend"
 )
+AZURE_TRACK_CLICK_URL = os.getenv(
+    "AZURE_TRACK_CLICK_URL",
+    "https://YOUR_FUNCTION_NAME.azurewebsites.net/api/track_click"
+)
 AZURE_FUNCTION_KEY = os.getenv("AZURE_FUNCTION_KEY", "")
 
-# Cache pour les métadonnées
-@st.cache_data
-def load_articles_metadata():
-    """Charge les métadonnées des articles"""
-    try:
-        return pd.read_csv('data/articles_metadata.csv')
-    except FileNotFoundError:
-        st.warning("⚠️ Fichier de métadonnées introuvable")
-        return pd.DataFrame()
-
-# Cache pour la liste des utilisateurs
-@st.cache_data
-def load_users_list(sample_size: int = 500):
-    """Charge un échantillon d'utilisateurs"""
-    try:
-        clicks_df = pd.read_csv('data/clicks_sample.csv')
-        users = sorted(clicks_df['user_id'].unique()[:sample_size].tolist())
-        return users
-    except:
-        return list(range(1, 101))
 
 def get_recommendations(user_id: int, n_recommendations: int = 5) -> Dict:
-    """Appelle l'Azure Function pour obtenir les recommandations"""
+    """Appelle l'Azure Function pour obtenir les recommandations enrichies"""
     try:
         headers = {"Content-Type": "application/json"}
         if AZURE_FUNCTION_KEY:
@@ -117,7 +86,7 @@ def get_recommendations(user_id: int, n_recommendations: int = 5) -> Dict:
             AZURE_FUNCTION_URL,
             json=payload,
             headers=headers,
-            timeout=10
+            timeout=30  # Timeout plus long pour le premier chargement
         )
 
         if response.status_code == 200:
@@ -129,19 +98,53 @@ def get_recommendations(user_id: int, n_recommendations: int = 5) -> Dict:
             }
 
     except requests.exceptions.Timeout:
-        return {"error": "Timeout de la requête"}
+        return {"error": "Timeout de la requête (cold start?)"}
     except requests.exceptions.ConnectionError:
         return {"error": "Impossible de se connecter au serveur"}
     except Exception as e:
         return {"error": f"Erreur inattendue: {str(e)}"}
 
-def display_recommendation_card(rank: int, article_id: int, article_data: Optional[pd.Series]):
-    """Affiche une carte de recommandation avec Streamlit natif"""
 
-    # Container avec bordure et style
+def track_click(user_id: int, article_id: int, rank: int):
+    """Envoie un événement de clic à l'API de tracking"""
+    try:
+        headers = {"Content-Type": "application/json"}
+        if AZURE_FUNCTION_KEY:
+            headers["x-functions-key"] = AZURE_FUNCTION_KEY
+
+        payload = {
+            "user_id": user_id,
+            "article_id": article_id,
+            "interaction_type": "click",
+            "timestamp": int(datetime.utcnow().timestamp() * 1000),
+            "metadata": {
+                "source": "streamlit_app",
+                "rank": rank
+            }
+        }
+
+        response = requests.post(
+            AZURE_TRACK_CLICK_URL,
+            json=payload,
+            headers=headers,
+            timeout=5
+        )
+
+        return response.status_code == 200
+
+    except:
+        return False
+
+
+def display_recommendation_card(rank: int, article: Dict, user_id: int):
+    """Affiche une carte de recommandation enrichie avec tracking"""
+
+    article_id = article.get('article_id')
+    has_metadata = article.get('metadata_available', False)
+
+    # Container avec bordure
     with st.container():
-        # Badge de rang
-        col_rank, col_content = st.columns([1, 9])
+        col_rank, col_content, col_action = st.columns([1, 8, 1])
 
         with col_rank:
             st.markdown(f"""
@@ -164,51 +167,57 @@ def display_recommendation_card(rank: int, article_id: int, article_data: Option
             """, unsafe_allow_html=True)
 
         with col_content:
-            # Titre de l'article
+            # Titre
             st.markdown(f"### 📰 Article **{article_id}**")
 
-            if article_data is not None and not article_data.empty:
-                # Afficher les métadonnées dans des colonnes
+            if has_metadata:
+                # Afficher les métadonnées enrichies
                 meta_col1, meta_col2, meta_col3, meta_col4 = st.columns(4)
 
                 with meta_col1:
-                    category = article_data.get('category_id', 'N/A')
+                    category = article.get('category_id', 'N/A')
                     st.metric("📁 Catégorie", category)
 
                 with meta_col2:
-                    publisher = article_data.get('publisher_id', 'N/A')
+                    publisher = article.get('publisher_id', 'N/A')
                     st.metric("✍️ Éditeur", publisher)
 
                 with meta_col3:
-                    words = int(article_data.get('words_count', 0))
+                    words = article.get('words_count', 0)
                     st.metric("📝 Longueur", f"{words} mots")
 
                 with meta_col4:
-                    if 'created_at_ts' in article_data:
-                        try:
-                            date = pd.to_datetime(article_data['created_at_ts'], unit='ms')
-                            st.metric("📅 Publié", date.strftime('%d/%m/%Y'))
-                        except:
-                            st.metric("📅 Publié", "N/A")
+                    created_at = article.get('created_at')
+                    if created_at:
+                        st.metric("📅 Publié", created_at)
                     else:
                         st.metric("📅 Publié", "N/A")
             else:
-                st.caption("_Métadonnées non disponibles_")
+                st.caption("_Métadonnées non disponibles côté serveur_")
+
+        with col_action:
+            # Bouton de tracking
+            if st.button("👆 Clic", key=f"track_{article_id}", use_container_width=True):
+                if track_click(user_id, article_id, rank):
+                    st.success("✅", icon="✅")
+                else:
+                    st.error("❌")
 
         # Séparateur
         st.divider()
 
+
 def main():
     """Interface principale"""
 
-    # Sidebar - Options avancées
+    # Sidebar - Options
     with st.sidebar:
         st.title("⚙️ Options")
 
         st.markdown("### 🧪 Mode de saisie")
         input_mode = st.radio(
             "Choisir le mode",
-            ["📋 Liste utilisateurs", "✍️ Saisie manuelle", "🎲 Utilisateur aléatoire"],
+            ["✍️ Saisie manuelle", "🎲 Utilisateur aléatoire"],
             help="Sélectionne comment choisir l'utilisateur"
         )
 
@@ -243,29 +252,19 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # Section de sélection utilisateur selon le mode
+    # Section de sélection utilisateur
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        if input_mode == "📋 Liste utilisateurs":
-            # Charger la liste des utilisateurs
-            users_list = load_users_list()
-            selected_user = st.selectbox(
-                "👤 Sélectionner un utilisateur",
-                options=users_list,
-                help="Choisissez un ID utilisateur dans la liste"
-            )
-
-        elif input_mode == "✍️ Saisie manuelle":
+        if input_mode == "✍️ Saisie manuelle":
             selected_user = st.number_input(
                 "👤 Entrer un ID utilisateur",
                 min_value=1,
                 max_value=999999,
                 value=12345,
                 step=1,
-                help="Saisissez n'importe quel ID utilisateur (même inconnu du modèle)"
+                help="Saisissez n'importe quel ID utilisateur"
             )
-
         else:  # Mode aléatoire
             import random
             if 'random_user' not in st.session_state:
@@ -276,8 +275,7 @@ def main():
                 selected_user = st.number_input(
                     "👤 Utilisateur aléatoire",
                     value=st.session_state.random_user,
-                    disabled=True,
-                    help="Un utilisateur aléatoire a été généré"
+                    disabled=True
                 )
             with col_rand2:
                 if st.button("🔄 Nouveau", use_container_width=True):
@@ -285,7 +283,6 @@ def main():
                     st.rerun()
 
     with col2:
-        # Bouton de génération
         generate_btn = st.button(
             "✨ Recommander",
             type="primary",
@@ -296,22 +293,37 @@ def main():
 
     # Affichage des recommandations
     if generate_btn:
-
-        # Titre de la section
         st.markdown(f"## 🎯 Recommandations pour l'utilisateur **{selected_user}**")
-        st.markdown("")  # Espacement
+        st.markdown("")
 
-        with st.spinner("Génération des recommandations en cours..."):
+        with st.spinner("Génération des recommandations... (peut prendre 10-15s au premier chargement)"):
 
             if use_mock:
-                # Mode test avec données simulées
+                # Mode test
                 import random
                 st.info("Mode test activé - Données simulées")
 
                 recommendations_data = {
                     "user_id": selected_user,
-                    "recommendations": random.sample(range(1000, 10000), min(n_recommendations, 9)),
+                    "recommendations": [
+                        {
+                            "article_id": random.randint(1000, 10000),
+                            "category_id": random.randint(1, 461),
+                            "words_count": random.randint(100, 500),
+                            "created_at": "2025-10-17",
+                            "publisher_id": 0,
+                            "metadata_available": True
+                        }
+                        for _ in range(n_recommendations)
+                    ],
+                    "count": n_recommendations,
                     "model": "ALS",
+                    "diversity": {
+                        "category_diversity": 0.800,
+                        "unique_categories": 4
+                    },
+                    "metadata_loaded": True,
+                    "embeddings_loaded": False,
                     "status": "success"
                 }
             else:
@@ -321,32 +333,35 @@ def main():
             # Gestion des erreurs
             if "error" in recommendations_data:
                 error_msg = f"❌ **Erreur:** {recommendations_data['error']}"
-                if "message" in recommendations_data and recommendations_data["message"]:
+                if "message" in recommendations_data:
                     error_msg += f"\n\n_{recommendations_data['message']}_"
                 st.error(error_msg)
 
             elif "recommendations" in recommendations_data:
-                # Message de succès
+                # Afficher les infos de chargement
                 if not use_mock:
-                    st.success(f"✅ Recommandations générées avec succès par le modèle {recommendations_data.get('model', 'ALS')}")
+                    col_info1, col_info2, col_info3 = st.columns(3)
+                    with col_info1:
+                        model = recommendations_data.get('model', 'ALS')
+                        st.success(f"✅ Modèle: **{model}**")
+                    with col_info2:
+                        metadata_loaded = recommendations_data.get('metadata_loaded', False)
+                        icon = "✅" if metadata_loaded else "⚠️"
+                        st.info(f"{icon} Métadonnées: **{'Chargées' if metadata_loaded else 'Non chargées'}**")
+                    with col_info3:
+                        embeddings_loaded = recommendations_data.get('embeddings_loaded', False)
+                        icon = "✅" if embeddings_loaded else "⚠️"
+                        st.info(f"{icon} Embeddings: **{'Chargés' if embeddings_loaded else 'Non chargés'}**")
 
-                # Charger les métadonnées
-                articles_df = load_articles_metadata()
+                    st.markdown("")
 
                 # Afficher les recommandations
-                recommendations = recommendations_data["recommendations"][:n_recommendations]
+                recommendations = recommendations_data["recommendations"]
 
-                for idx, article_id in enumerate(recommendations, 1):
-                    # Récupérer les données de l'article
-                    article_data = None
-                    if not articles_df.empty:
-                        article_row = articles_df[articles_df['article_id'] == article_id]
-                        if not article_row.empty:
-                            article_data = article_row.iloc[0]
+                for idx, article in enumerate(recommendations, 1):
+                    display_recommendation_card(idx, article, selected_user)
 
-                    display_recommendation_card(idx, article_id, article_data)
-
-                # Résumé en bas
+                # Résumé
                 st.markdown("---")
 
                 col_summary1, col_summary2, col_summary3 = st.columns(3)
@@ -355,36 +370,27 @@ def main():
                     st.metric("👤 Utilisateur", selected_user)
 
                 with col_summary2:
-                    st.metric("📊 Modèle", "ALS")
+                    diversity_info = recommendations_data.get('diversity', {})
+                    diversity_score = diversity_info.get('category_diversity', 0)
+                    st.metric("🎨 Diversité", f"{diversity_score:.2f}")
 
                 with col_summary3:
-                    n_reco = len(recommendations)
-                    if not articles_df.empty:
-                        categories = []
-                        for aid in recommendations:
-                            article_row = articles_df[articles_df['article_id'] == aid]
-                            if not article_row.empty:
-                                categories.append(article_row.iloc[0].get('category_id', 'N/A'))
-                        diversity = len(set(categories))
-                        st.metric("🎨 Diversité", f"{diversity} catégories")
-                    else:
-                        st.metric("📰 Articles", n_reco)
+                    unique_cats = diversity_info.get('unique_categories', 0)
+                    st.metric("📁 Catégories uniques", unique_cats)
 
             else:
                 st.warning("⚠️ Format de réponse inattendu")
 
     else:
-        # Message d'accueil
-        st.info("👆 Sélectionnez un utilisateur et cliquez sur 'Recommander' pour obtenir des suggestions personnalisées")
+        st.info("👆 Sélectionnez un utilisateur et cliquez sur 'Recommander'")
 
     # Footer
-    st.markdown("")
-    st.markdown("")
     st.markdown("""
-    <div class="footer-text">
-        🚀 Powered by <strong>Azure Functions</strong> & <strong>Collaborative Filtering (ALS)</strong>
+    <div style="text-align: center; color: #999; font-size: 0.95rem; padding: 1.5rem; margin-top: 3rem; border-top: 1px solid #e0e0e0;">
+        🚀 Powered by <strong>Azure Functions Premium</strong> & <strong>ALS Collaborative Filtering</strong>
     </div>
     """, unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
