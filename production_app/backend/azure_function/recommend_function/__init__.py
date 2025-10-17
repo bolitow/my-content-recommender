@@ -257,11 +257,15 @@ def calculate_diversity(recommendations: List[Dict[str, Any]]) -> Dict[str, Any]
     # Diversité = ratio de catégories uniques
     diversity_score = unique_categories / total_recommendations if total_recommendations > 0 else 0
 
+    # Convertir explicitement les types numpy en types Python pour JSON serialization
+    categories_dist = pd.Series(categories).value_counts()
+    categories_distribution = {int(k): int(v) for k, v in categories_dist.items()}
+
     return {
         "category_diversity": round(diversity_score, 3),
-        "unique_categories": unique_categories,
-        "total_recommendations": total_recommendations,
-        "categories_distribution": dict(pd.Series(categories).value_counts())
+        "unique_categories": int(unique_categories),
+        "total_recommendations": int(total_recommendations),
+        "categories_distribution": categories_distribution
     }
 
 
